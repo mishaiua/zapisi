@@ -97,6 +97,10 @@ main{max-width:640px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 12px)
 .sugg button{padding:10px 14px;text-align:left;border-bottom:.5px solid var(--line)}
 .sugg button:last-child{border-bottom:0}
 .sugg small{color:var(--muted);margin-left:6px}
+.sugg .new{color:var(--accent);font-weight:600}
+.sugg mark{background:none;color:var(--accent);font-weight:600}
+.picked{font-size:13px;color:var(--ok);margin:-4px 4px 0}
+.picked:empty{display:none}
 .seg{display:grid;grid-template-columns:repeat(3,1fr);background:var(--field);border-radius:10px;padding:2px}
 .seg button{padding:8px 4px;border-radius:8px;font-size:15px}
 .seg button.on{background:var(--card);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.15)}
@@ -170,6 +174,65 @@ const STATUS = { planned: 'Ожидается', done: 'Пришёл', cancelled:
 const getP = id => db.patients.find(p => p.id === id);
 const getA = id => db.appts.find(a => a.id === id);
 const pName = a => (getP(a.patientId) || {}).name || 'Без имени';
+// ---------- телефон ----------
+const PHONE_PREFIX = '+380 ';
+// приводит любой вид номера к «+380 67 123 45 67»: из истории звонков, контактов, с пробелами, 0XX…
+function normPhone(raw) {
+  const s = String(raw || '').replace(/[^\d+]/g, '');
+  let d = s.replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('380380')) d = d.slice(3);                       // «+380» + вставленный «+380…»
+  if (d.startsWith('3800') && d.length === 13) d = '380' + d.slice(4); // «+380» + вставленный «0…»
+  if (d.length === 10 && d[0] === '0') d = '38' + d;
+  else if (d.length === 9 && !s.startsWith('+')) d = '380' + d;
+  if (d.startsWith('380') && d.length === 12) return `+380 ${d.slice(3, 5)} ${d.slice(5, 8)} ${d.slice(8, 10)} ${d.slice(10)}`;
+  return (s.startsWith('+') || d.length > 10 ? '+' : '') + d;
+}
+// пустой номер — если ввели только код страны
+const cleanPhone = v => { const n = normPhone(v); return n.replace(/\D/g, '').length > 4 ? n : ''; };
+function phoneInput(inp) {
+  if (!inp.value.trim()) inp.value = PHONE_PREFIX;
+  const toEnd = () => setTimeout(() => { const l = inp.value.length; try { inp.setSelectionRange(l, l); } catch (e) {} }, 0);
+  inp.addEventListener('focus', () => { if (!inp.value.trim()) inp.value = PHONE_PREFIX; if (inp.value === PHONE_PREFIX) toEnd(); });
+  // вставка целого номера заменяет поле целиком, чтобы не получилось «+380 +380…»
+  inp.addEventListener('paste', e => {
+    const txt = (e.clipboardData || window.clipboardData).getData('text');
+    if (txt.replace(/\D/g, '').length >= 9) { e.preventDefault(); inp.value = normPhone(txt); toEnd(); }
+  });
+  inp.addEventListener('input', e => {
+    if (e.inputType === 'insertFromPaste' || e.inputType === 'insertReplacementText' || inp.value.replace(/\D/g, '').length > 12) { inp.value = normPhone(inp.value); toEnd(); }
+  });
+  inp.addEventListener('blur', () => { const n = cleanPhone(inp.value); inp.value = n || PHONE_PREFIX; });
+}
+// ---------- поиск пациентов ----------
+const normTxt = s => String(s || '').toLowerCase().replace(/ё/g, 'е');
+// каждое слово запроса должно встретиться в имени, в любом порядке: «петр ив» найдёт «Иванов Пётр»
+function findPatients(q) {
+  const words = normTxt(q).split(/\s+/).filter(Boolean), qd = q.replace(/\D/g, '');
+  const last = {};
+  db.appts.forEach(a => { const k = a.date + a.time; if (!last[a.patientId] || last[a.patientId] < k) last[a.patientId] = k; });
+  const score = x => {
+    const n = normTxt(x.name), parts = n.split(/\s+/);
+    if (words.length && words.every(w => n.includes(w))) return words.every(w => parts.some(pp => pp.startsWith(w))) ? 2 : 1;
+    if (qd.length >= 3 && (x.phone || '').replace(/\D/g, '').includes(qd)) return 1;
+    return words.length ? 0 : 1;
+  };
+  return db.patients.map(x => [x, score(x)]).filter(([, sc]) => sc > 0)
+    .sort((a, b) => b[1] - a[1] || (last[b[0].id] || '').localeCompare(last[a[0].id] || '') || a[0].name.localeCompare(b[0].name, 'ru'))
+    .map(([x]) => x);
+}
+function hlName(name, q) {
+  const words = normTxt(q).split(/\s+/).filter(Boolean);
+  if (!words.length) return esc(name);
+  const n = normTxt(name), mark = new Array(name.length).fill(false);
+  words.forEach(w => { let i = n.indexOf(w); while (i >= 0) { for (let k = i; k < i + w.length; k++) mark[k] = true; i = n.indexOf(w, i + 1); } });
+  let out = '', open = false;
+  for (let i = 0; i < name.length; i++) {
+    if (mark[i] !== open) { out += mark[i] ? '<mark>' : '</mark>'; open = mark[i]; }
+    out += esc(name[i]);
+  }
+  return out + (open ? '</mark>' : '');
+}
 function dateLabel(s, withYear) {
   const d = fromIso(s);
   let t = `${d.getDate()} ${MON[d.getMonth()]}`;
@@ -282,9 +345,7 @@ function renderPatients() {
 }
 function renderPList() {
   const q = state.q.trim().toLowerCase();
-  const ps = db.patients
-    .filter(p => !q || p.name.toLowerCase().includes(q) || (p.phone || '').replace(/\s/g, '').includes(q.replace(/\s/g, '')))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const ps = (q ? findPatients(q) : db.patients.slice()).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   $('#plist').innerHTML = ps.length
     ? `<div class="group">${ps.map(p => {
         const n = nextVisit(p.id);
@@ -346,15 +407,16 @@ function apptSheet(id, preset = {}) {
   const dur = Number(a ? a.dur : 30);
   const durs = DURS.includes(dur) ? DURS : [...DURS, dur].sort((x, y) => x - y);
   const services = [...new Set(db.appts.map(x => x.service).filter(Boolean))].sort();
-  let selPid = p ? p.id : null;
+  let selPid = p ? p.id : null, forceNew = false;
   let status = a ? (a.status || 'planned') : 'planned';
 
   openSheet(`
     <div class="sh-head"><button class="link" data-x="close">Отмена</button><b>${a ? 'Запись' : 'Новая запись'}</b><button class="link strong" data-x="save">Готово</button></div>
     <div class="form">
-      <label class="field"><span>Пациент</span><input id="fName" autocomplete="off" autocapitalize="words" placeholder="Имя и фамилия" value="${esc(p ? p.name : '')}"></label>
+      <label class="field"><span>Пациент</span><input id="fName" type="search" enterkeyhint="done" autocomplete="off" autocorrect="off" autocapitalize="words" placeholder="Найти или ввести нового" value="${esc(p ? p.name : '')}"></label>
       <div class="sugg" id="sugg"></div>
-      <label class="field"><span>Телефон</span><input id="fPhone" type="tel" placeholder="+371 …" value="${esc(p ? p.phone : '')}"></label>
+      <div class="picked" id="picked">${p ? '✓ Пациент из списка' : ''}</div>
+      <label class="field"><span>Телефон</span><input id="fPhone" type="tel" autocomplete="off" placeholder="+380 …" value="${esc(p ? p.phone : '')}"></label>
       <div class="row2">
         <label class="field"><span>Дата</span><input id="fDate" type="date" value="${date}"></label>
         <label class="field"><span>Время</span><input id="fTime" type="time" step="300" value="${time}"></label>
@@ -369,18 +431,33 @@ function apptSheet(id, preset = {}) {
       ${a ? '<button class="btn danger" data-x="del">Удалить запись</button>' : ''}
     </div>`, root => {
     const fName = root.querySelector('#fName'), fPhone = root.querySelector('#fPhone');
-    const sugg = root.querySelector('#sugg');
+    const sugg = root.querySelector('#sugg'), picked = root.querySelector('#picked');
+    phoneInput(fPhone);
+    // список пациентов под полем: совпадения по имени/фамилии + «Новый пациент»
     const showSugg = () => {
-      const q = fName.value.trim().toLowerCase();
-      if (!q || selPid) { sugg.innerHTML = ''; return; }
-      const m = db.patients.filter(x => x.name.toLowerCase().includes(q) || (x.phone || '').includes(q)).slice(0, 6);
-      sugg.innerHTML = m.map(x => `<button data-pid="${x.id}">${esc(x.name)}<small>${esc(x.phone || '')}</small></button>`).join('');
+      if (selPid || forceNew) { sugg.innerHTML = ''; return; }
+      const q = fName.value.trim();
+      const m = findPatients(q).slice(0, 8);
+      sugg.innerHTML = m.map(x => `<button type="button" data-pid="${x.id}">${hlName(x.name, q)}<small>${esc(x.phone || '')}</small></button>`).join('')
+        + (q ? `<button type="button" class="new" data-new="1">＋ Новый пациент: «${esc(q)}»</button>` : '');
     };
-    fName.addEventListener('input', () => { if (selPid && getP(selPid).name !== fName.value) selPid = null; showSugg(); });
-    sugg.addEventListener('click', e => {
-      const b = e.target.closest('[data-pid]'); if (!b) return;
-      const x = getP(b.dataset.pid); selPid = x.id; fName.value = x.name; fPhone.value = x.phone || ''; sugg.innerHTML = '';
+    const setPicked = () => { picked.textContent = selPid ? '✓ Пациент из списка' : forceNew ? '＋ Новый пациент' : ''; };
+    fName.addEventListener('focus', showSugg);
+    fName.addEventListener('input', () => {
+      if (selPid && getP(selPid).name !== fName.value) { selPid = null; if (!a) fPhone.value = PHONE_PREFIX; }
+      forceNew = false; setPicked(); showSugg();
     });
+    fName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fName.blur(); } });
+    sugg.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.pid) {
+        const x = getP(b.dataset.pid); selPid = x.id; fName.value = x.name; fPhone.value = x.phone || PHONE_PREFIX;
+        fName.blur();
+      } else { forceNew = true; selPid = null; fPhone.value = PHONE_PREFIX; fPhone.focus(); }
+      sugg.innerHTML = ''; setPicked();
+    });
+    // список прячется, когда переходят к другим полям
+    root.addEventListener('focusin', e => { if (e.target !== fName) sugg.innerHTML = ''; });
     const checkConflict = () => {
       const d = root.querySelector('#fDate').value, t = root.querySelector('#fTime').value, du = Number(root.querySelector('#fDur').value);
       const w = root.querySelector('#warn');
@@ -405,16 +482,16 @@ function apptSheet(id, preset = {}) {
         closeSheet(); return deleteAppt(id);
       }
       if (act === 'save') {
-        const name = fName.value.trim(), phone = fPhone.value.trim();
+        const name = fName.value.trim(), phone = cleanPhone(fPhone.value);
         const d = root.querySelector('#fDate').value, t = root.querySelector('#fTime').value;
         if (!name) { fName.focus(); return toast('Укажите пациента'); }
         if (!d || !t) return toast('Укажите дату и время');
         let pid = selPid;
-        if (!pid) {
+        if (!pid && !forceNew) {
           const same = db.patients.filter(y => y.name.trim().toLowerCase() === name.toLowerCase());
           if (same.length === 1) pid = same[0].id;
         }
-        if (!pid) { const np = { id: uid(), name, phone, note: '', created: Date.now() }; db.patients.push(np); pid = np.id; }
+        if (!pid) { const np = { id: uid(), name: name.replace(/(^|[\s-])\S/g, c => c.toUpperCase()), phone, note: '', created: Date.now() }; db.patients.push(np); pid = np.id; }
         else if (phone && getP(pid).phone !== phone) getP(pid).phone = phone;
         const rec = a || { id: uid(), created: Date.now() };
         Object.assign(rec, { patientId: pid, date: d, time: t, dur: Number(root.querySelector('#fDur').value), service: root.querySelector('#fSvc').value.trim(), note: root.querySelector('#fNote').value.trim(), status });
@@ -438,7 +515,7 @@ function patientSheet(pid) {
     <div class="sh-head"><button class="link" data-x="close">Отмена</button><b>${p ? 'Пациент' : 'Новый пациент'}</b><button class="link strong" data-x="save">Готово</button></div>
     <div class="form">
       <label class="field"><span>Имя и фамилия</span><input id="pName" autocapitalize="words" value="${esc(p ? p.name : '')}"></label>
-      <label class="field"><span>Телефон</span><input id="pPhone" type="tel" placeholder="+371 …" value="${esc(p ? p.phone : '')}"></label>
+      <label class="field"><span>Телефон</span><input id="pPhone" type="tel" autocomplete="off" placeholder="+380 …" value="${esc(p ? p.phone : '')}"></label>
       <label class="field"><span>Заметки</span><textarea id="pNote" rows="4" placeholder="Аллергии, особенности, план лечения">${esc(p ? p.note : '')}</textarea></label>
       ${p ? `<div class="btns">${p.phone ? `<a class="btn" href="tel:${esc(p.phone.replace(/[^\d+]/g, ''))}">Позвонить</a>` : ''}<button class="btn primary" data-x="book"${p.phone ? '' : ' style="grid-column:1/-1"'}>Записать</button></div>` : '<button class="btn primary" data-x="save">Сохранить</button>'}
       ${p ? `
@@ -448,6 +525,7 @@ function patientSheet(pid) {
         ${past.length ? `<div class="group">${past.map(vRow).join('')}</div>` : '<p class="p">Нет</p>'}
         <button class="btn danger" data-x="del" style="margin-top:12px">Удалить пациента</button>` : ''}
     </div>`, root => {
+    phoneInput(root.querySelector('#pPhone'));
     root.onclick = e => {
       const x = e.target.closest('[data-x]'); if (!x) return;
       const act = x.dataset.x;
@@ -467,7 +545,7 @@ function patientSheet(pid) {
       const name = root.querySelector('#pName').value.trim();
       if (!name) { if (!silent) toast('Укажите имя'); return false; }
       const rec = p || { id: uid(), created: Date.now() };
-      Object.assign(rec, { name, phone: root.querySelector('#pPhone').value.trim(), note: root.querySelector('#pNote').value.trim() });
+      Object.assign(rec, { name, phone: cleanPhone(root.querySelector('#pPhone').value), note: root.querySelector('#pNote').value.trim() });
       if (!p) db.patients.push(rec);
       save(); return true;
     }
