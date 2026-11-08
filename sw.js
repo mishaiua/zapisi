@@ -1,6 +1,6 @@
 // Хранит файлы приложения на телефоне, чтобы оно открывалось без интернета.
 // При появлении интернета тихо скачивает обновления к следующему запуску.
-const CACHE = 'zapisi-v2';
+const CACHE = 'zapisi-v3';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

@@ -107,16 +107,6 @@ main{max-width:640px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 12px)
 .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(40,40,40,.92);color:#fff;padding:10px 18px;border-radius:12px;font-size:15px;z-index:30;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center}
 .toast.show{opacity:1}
-.switch{-webkit-appearance:none;appearance:none;flex:none;width:51px;height:31px;border-radius:999px;background:var(--line);position:relative;margin:0;transition:background .2s;cursor:pointer}
-.switch::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.2);transition:transform .2s}
-.switch:checked{background:var(--ok)}
-.switch:checked::after{transform:translateX(20px)}
-.how summary{list-style:none;cursor:pointer}
-.how summary::-webkit-details-marker{display:none}
-.how ol{padding:4px 16px 0 32px;margin:8px 0}
-.how li{margin-bottom:8px}
-.how a{color:var(--accent)}
-.how .p{margin:6px 16px 12px}
 </style>
 </head>
 <body>
@@ -286,23 +276,6 @@ function renderMore() {
       <div class="row"><div>Пациентов</div><div class="r">${db.patients.length}</div></div>
       <div class="row"><div>Записей</div><div class="r">${db.appts.length}</div></div>
     </div>
-    <div class="h2">Календарь iPhone</div>
-    <div class="group">
-      <label class="row"><div>Синхронизировать с календарём</div><input type="checkbox" class="switch" id="syncOn"${syncCfg().on ? ' checked' : ''}></label>
-      <button class="row" data-act="syncnow"><div style="color:var(--accent)">Синхронизировать сейчас</div></button>
-    </div>
-    <p class="p">Записи с сегодняшнего дня появляются в календаре «Пациенты» с напоминанием за час. Отменённые и удалённые записи из календаря исчезают. Прошлые события не меняются.</p>
-    <details class="group how">
-      <summary class="row"><div style="color:var(--accent)">Как настроить (один раз)</div></summary>
-      <ol class="p">
-        <li>Откройте «Календарь» → «Календари» внизу → «Добавить календарь». Назовите его <b>Пациенты</b> и выберите цвет. Если есть раздел «На iPhone», создайте календарь в нём: так записи не попадут в iCloud.</li>
-        <li><a href="${SHORTCUT_FILE}" target="_blank" rel="noopener">Установите команду «Записи»</a> → «Добавить быструю команду». Если файл просто скачался, откройте его в «Файлы» → «Загрузки». Если спросит календарь, выберите «Пациенты». Не переименовывайте команду.</li>
-        <li>«Настройки» → «Приложения» → «Команды» → «Дополнения» → включите «Разрешить удаление без подтверждения». Иначе iPhone будет каждый раз спрашивать перед обновлением календаря.</li>
-        <li>Включите переключатель выше и нажмите «Синхронизировать сейчас». В первый раз разрешите команде доступ к календарю: «Разрешить всегда».</li>
-      </ol>
-      <p class="p">После каждого сохранения на секунду откроется приложение «Команды». Вернуться: «◀ Записи» в левом верхнем углу.</p>
-      <p class="p">Данные передаются только внутри телефона, в интернет не уходят.</p>
-    </details>
     <div class="h2">Резервная копия</div>
     <div class="group">
       <button class="row" data-act="export"><div style="color:var(--accent)">Сохранить копию в файл</div></button>
@@ -313,10 +286,6 @@ function renderMore() {
     <div class="h2">Как установить на iPhone</div>
     <p class="p">1. Откройте ссылку в Safari.<br>2. Нажмите «Поделиться» (квадрат со стрелкой).<br>3. Выберите «На экран „Домой“».<br>4. Дальше открывайте только через значок на экране. Интернет не нужен.</p>
     <p class="p">Важно: в Safari и в значке на экране данные разные. Записывайте всё через значок.</p>`;
-  $('#syncOn').addEventListener('change', e => {
-    const c = syncCfg(); c.on = e.target.checked; setSyncCfg(c);
-    if (c.on) calSync(true); else toast('Синхронизация выключена');
-  });
 }
 
 // ---------- шторка ----------
@@ -409,7 +378,7 @@ function apptSheet(id, preset = {}) {
       if (act === 'card') { const pid = a.patientId; closeSheet(); return setTimeout(() => patientSheet(pid), 280); }
       if (act === 'del') {
         if (!confirm('Удалить эту запись?')) return;
-        db.appts = db.appts.filter(y => y.id !== id); save(); closeSheet(); render(); toast('Запись удалена'); return calSync();
+        db.appts = db.appts.filter(y => y.id !== id); save(); closeSheet(); render(); return toast('Запись удалена');
       }
       if (act === 'save') {
         const name = fName.value.trim(), phone = fPhone.value.trim();
@@ -429,7 +398,6 @@ function apptSheet(id, preset = {}) {
         save();
         state.sel = d; state.tab = state.tab === 'more' ? 'day' : state.tab;
         closeSheet(); render(); toast(a ? 'Сохранено' : 'Пациент записан');
-        calSync();
       }
     };
   });
@@ -467,9 +435,9 @@ function patientSheet(pid) {
         if (!confirm(`Удалить пациента${n ? ' и ' + n + ' ' + plural(n, 'запись', 'записи', 'записей') : ''}?`)) return;
         db.patients = db.patients.filter(y => y.id !== pid);
         db.appts = db.appts.filter(y => y.patientId !== pid);
-        save(); closeSheet(); render(); toast('Пациент удалён'); return calSync();
+        save(); closeSheet(); render(); return toast('Пациент удалён');
       }
-      if (act === 'save') { if (persist()) { closeSheet(); render(); toast('Сохранено'); calSync(); } }
+      if (act === 'save') { if (persist()) { closeSheet(); render(); toast('Сохранено'); } }
     };
     function persist(silent) {
       const name = root.querySelector('#pName').value.trim();
@@ -480,37 +448,6 @@ function patientSheet(pid) {
       save(); return true;
     }
   });
-}
-
-// ---------- календарь iPhone (через быструю команду «Записи») ----------
-// Данные не уходят в интернет: приложение передаёт их команде на этом же телефоне.
-const SYNC_KEY = 'dent-sync', SHORTCUT = 'Записи';
-const SHORTCUT_FILE = 'zapisi.shortcut';
-function syncCfg() { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch (e) { return {}; } }
-function setSyncCfg(c) { try { localStorage.setItem(SYNC_KEY, JSON.stringify(c)); } catch (e) {} }
-function calPayload() {
-  const t = today();
-  const events = db.appts.filter(a => a.date >= t && a.status !== 'cancelled').sort(byTime).map(a => {
-    const p = getP(a.patientId) || {}, s = toMin(a.time), e = s + Number(a.dur || 30);
-    const endDate = e >= 24 * 60 ? addDays(a.date, 1) : a.date;
-    return {
-      title: (p.name || 'Пациент') + (a.service ? ' — ' + a.service : ''),
-      start: a.date + ' ' + a.time,
-      end: endDate + ' ' + fromMin(e),
-      notes: [p.phone && 'Тел.: ' + p.phone, a.note].filter(Boolean).join('\n')
-    };
-  });
-  return JSON.stringify({ events });
-}
-// force — синхронизировать, даже если с прошлого раза ничего не изменилось
-function calSync(force) {
-  const c = syncCfg();
-  if (!c.on) return;
-  const text = calPayload();
-  if (!force && text === c.last) return;
-  c.last = text; setSyncCfg(c);
-  const url = 'shortcuts://run-shortcut?name=' + encodeURIComponent(SHORTCUT) + '&input=text&text=' + encodeURIComponent(text);
-  setTimeout(() => { location.href = url; }, 400);
 }
 
 // ---------- резервная копия ----------
@@ -539,7 +476,7 @@ $('#importFile').addEventListener('change', async e => {
     if (!Array.isArray(d.patients) || !Array.isArray(d.appts)) throw new Error('это не файл копии');
     if (!confirm(`В файле: ${d.patients.length} пациентов и ${d.appts.length} записей.\nЗаменить ими текущие данные?`)) return;
     db = { patients: d.patients, appts: d.appts, lastBackup: Date.now() };
-    save(); render(); toast('Данные восстановлены'); calSync();
+    save(); render(); toast('Данные восстановлены');
   } catch (err) { alert('Не удалось открыть файл: ' + err.message); }
 });
 
@@ -555,9 +492,6 @@ document.addEventListener('click', e => {
     case 'tab': state.tab = v; render(); scrollTo(0, 0); break;
     case 'export': exportData(); break;
     case 'import': $('#importFile').click(); break;
-    case 'syncnow':
-      if (!syncCfg().on) { toast('Сначала включите синхронизацию'); break; }
-      calSync(true); break;
   }
 });
 $('#tabs').addEventListener('click', e => {
